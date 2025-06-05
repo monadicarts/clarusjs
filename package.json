@@ -1,0 +1,71 @@
+{
+  "name": "clarus.js",
+  "version": "0.1.0",
+  "description": "A powerful, fluent, and AOP-enhanced JavaScript rule engine.",
+  "keywords": [
+    "rule",
+    "engine",
+    "rules",
+    "logic",
+    "AOP",
+    "fluent",
+    "javascript",
+    "clarus",
+    "dsl",
+    "expert",
+    "system"
+  ],
+  "homepage": "https://github.com/monadicarts/clarusjs#readme",
+  "bugs": {
+    "url": "https://github.com/monadicarts/clarusjs/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "http://github.com/monadicarts/clarusjs"
+  },
+  "license": "MIT",
+  "author": "Justin Greisiger Frost <justinfrost@duck.com>",
+  "type": "module",
+  "main": "dist/clarus.cjs.js",
+  "module": "dist/clarus.esm.js",
+  "browser": "dist/clarus.umd.js",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "exports": {
+    ".": {
+      "import": "./dist/clarus.esm.js",
+      "require": "./dist/clarus.cjs.js"
+    }
+  },
+  "scripts": {
+    "clean": "rm -rf dist",
+    "build": "npm run clean && rollup -c",
+    "prepublishOnly": "npm run build",
+    "test": "jest",
+    "test:coverage": "jest --coverage",
+    "lint": "eslint src/**/*.js tests/**/*.js",
+    "format": "prettier --write \"src/**/*.js\" \"tests/**/*.js\"",
+    "check-types": "tsc --noEmit -p jsconfig.json"
+  },
+  "devDependencies": {
+    "@babel/cli": "^7.27.2",
+    "@babel/core": "^7.27.4",
+    "@babel/plugin-proposal-pipeline-operator": "^7.27.1",
+    "@babel/preset-env": "^7.27.2",
+    "@babel/runtime": "^7.27.4",
+    "@rollup/plugin-babel": "^6.0.4",
+    "@rollup/plugin-commonjs": "^28.0.3",
+    "@rollup/plugin-node-resolve": "^16.0.1",
+    "babel-plugin-proposal-pattern-matching": "^1.0.3",
+    "eslint": "^9.28.0",
+    "eslint-config-prettier": "^10.1.5",
+    "eslint-plugin-prettier": "^5.4.1",
+    "jest": "^29.7.0",
+    "prettier": "^3.5.3",
+    "rollup": "^4.41.1",
+    "typescript": "^5.8.3"
+  }
+}
