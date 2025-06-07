@@ -200,8 +200,8 @@ export const _ = {
    * @function from
    * @memberof _
    * @param {object} pattern - The pattern to match facts for accumulation (e.g., `{ type: 'order', status: 'completed' }`).
-   * @returns {{sum: function(string): object, count: function(): object, average: function(string): object, collect: function(string): object}}
-   * An object with accumulator methods (`sum`, `count`, `average`, `collect`), each returning an object
+   * @returns {{sum: function(string): object, count: function(): object, average: function(string): object, collect: function(string): object, minNumber: function(string): object, maxNumber: function(string): object, minDate: function(string): object, maxDate: function(string): object, minString: function(string): object, maxString: function(string): object, minBoolean: function(string): object, maxBoolean: function(string): object, distinctCollect: function(string): object}}
+   * An object with accumulator methods (`sum`, `count`, `average`, `collect`, etc.), each returning an object   * An object with accumulator methods (`sum`, `count`, `average`, `collect`), each returning an object
    * with an `into(variableName)` method to complete the definition.
    * @example
    * Rule('BigSpenderAlert')
@@ -220,7 +220,31 @@ export const _ = {
       /** @param {string} field @returns {{into: function(string): object}} */
       average: (field) => ({ ...baseAccumulatorDef, accumulate: 'average', on: field, into: (varName) => ({ ...baseAccumulatorDef, accumulate: 'average', on: field, into: varName }) }),
       /** @param {string} field @returns {{into: function(string): object}} */
-      collect: (field) => ({ ...baseAccumulatorDef, accumulate: 'collect', on: field, into: (varName) => ({ ...baseAccumulatorDef, accumulate: 'collect', on: field, into: varName }) })
+      collect: (field) => ({ ...baseAccumulatorDef, accumulate: 'collect', on: field, into: (varName) => ({ ...baseAccumulatorDef, accumulate: 'collect', on: field, into: varName }) }),
+      /** @param {string} field @returns {{into: function(string): object}} */
+      minNumber: (field) => ({ ...baseAccumulatorDef, accumulate: 'minNumber', on: field, into: (varName) => ({ ...baseAccumulatorDef, accumulate: 'minNumber', on: field, into: varName }) }),
+      /** @param {string} field @returns {{into: function(string): object}} */
+      maxNumber: (field) => ({ ...baseAccumulatorDef, accumulate: 'maxNumber', on: field, into: (varName) => ({ ...baseAccumulatorDef, accumulate: 'maxNumber', on: field, into: varName }) }),
+      /** @param {string} field @returns {{into: function(string): object}} */
+      minDate: (field) => ({ ...baseAccumulatorDef, accumulate: 'minDate', on: field, into: (varName) => ({ ...baseAccumulatorDef, accumulate: 'minDate', on: field, into: varName }) }),
+      /** @param {string} field @returns {{into: function(string): object}} */
+      maxDate: (field) => ({ ...baseAccumulatorDef, accumulate: 'maxDate', on: field, into: (varName) => ({ ...baseAccumulatorDef, accumulate: 'maxDate', on: field, into: varName }) }),
+      /** @param {string} field @returns {{into: function(string): object}} */
+      minString: (field) => ({ ...baseAccumulatorDef, accumulate: 'minString', on: field, into: (varName) => ({ ...baseAccumulatorDef, accumulate: 'minString', on: field, into: varName }) }),
+      /** @param {string} field @returns {{into: function(string): object}} */
+      maxString: (field) => ({ ...baseAccumulatorDef, accumulate: 'maxString', on: field, into: (varName) => ({ ...baseAccumulatorDef, accumulate: 'maxString', on: field, into: varName }) }),
+      /** @param {string} field @returns {{into: function(string): object}} */
+      minBoolean: (field) => ({ ...baseAccumulatorDef, accumulate: 'minBoolean', on: field, into: (varName) => ({ ...baseAccumulatorDef, accumulate: 'minBoolean', on: field, into: varName }) }),
+      /** @param {string} field @returns {{into: function(string): object}} */
+      maxBoolean: (field) => ({ ...baseAccumulatorDef, accumulate: 'maxBoolean', on: field, into: (varName) => ({ ...baseAccumulatorDef, accumulate: 'maxBoolean', on: field, into: varName }) }),
+      /**
+       * Collects unique values for a field.
+       * @param {string} field - The field whose unique values to collect.
+       * @returns {{into: function(string): object}} An object with an `into` method.
+       * @example _.from({ type: 'tag' }).distinctCollect('name').into('?uniqueTags')
+       */
+      distinctCollect: (field) => ({ ...baseAccumulatorDef, accumulate: 'distinctCollect', on: field, into: (varName) => ({ ...baseAccumulatorDef, accumulate: 'distinctCollect', on: field, into: varName }) })
+
     };
   },
 
@@ -274,7 +298,35 @@ export const _ = {
      * @returns {Array<*>} `['pathOr', defaultValue, target, ...pathSegments]`
      * @example _.guard.pathOr('N/A', '?user', 'contactInfo', 0, 'email')
      */
-    pathOr: (defaultValue, target, ...pathSegments) => ['pathOr', defaultValue, target, ...pathSegments]
+    pathOr: (defaultValue, target, ...pathSegments) => ['pathOr', defaultValue, target, ...pathSegments],
+    /**
+     * Creates an S-expression to check the size of a collection or string.
+     * @function hasSize
+     * @memberof _.guard
+     * @param {string|Array<*>} target - The variable (e.g., '?items') or S-expression for the target collection/string.
+     * @param {number|string|Array<*>} sizeMatcher - The expected size (literal), or an S-expression evaluating to a size, or a variable.
+     * @returns {Array<*>} `['hasSize', target, sizeMatcher]`
+     * @example _.guard.hasSize('?orders', 3) // Check if ?orders has exactly 3 elements
+     * @example _.guard.hasSize('?name', _.guard.gt('?minLength', 0)) // Check if length of ?name is greater than ?minLength
+     */
+    hasSize: (target, sizeMatcher) => ['hasSize', target, sizeMatcher],
+    /**
+     * Creates an S-expression to check if a value is null or undefined.
+     * @function isNil
+     * @memberof _.guard
+     * @param {string|Array<*>} target - The variable (e.g., '?field') or S-expression for the target value.
+     * @returns {Array<*>} `['isNil', target]`
+     */
+    isNil: (target) => ['isNil', target],
+    /**
+     * Creates an S-expression to check if a value is NOT null and NOT undefined.
+     * @function isDefined
+     * @memberof _.guard
+     * @param {string|Array<*>} target - The variable (e.g., '?field') or S-expression for the target value.
+     * @returns {Array<*>} `['isDefined', target]`
+     */
+    isDefined: (target) => ['isDefined', target]
+
   },
 
   /**
@@ -294,6 +346,9 @@ export const _ = {
    * @borrows _.guard.divide as _.select.divide
    * @borrows _.guard.path as _.select.path
    * @borrows _.guard.pathOr as _.select.pathOr
+   * @borrows _.guard.isNil as _.select.isNil
+   * @borrows _.guard.isDefined as _.select.isDefined
+   * @borrows _.guard.hasSize as _.select.hasSize
    */
   select: {} // Will be aliased after `_` object is fully defined.
 };

@@ -1,3 +1,4 @@
+// /home/justin/clarus/src/dsl/RuleBuilder.js
 /**
  * @file Defines the fluent RuleBuilder API for creating rule definitions.
  * This builder allows for a step-by-step, readable construction of rules
@@ -66,6 +67,7 @@ export class RuleBuilder {
    * )
    */
   when(...conditions) {
+    // console.log(`Adding conditions to rule [${this.rule.id}]:`, conditions); // Keep for debugging if needed
     this.rule.when.push(...conditions);
     return this;
   }
@@ -265,6 +267,10 @@ export class RuleBuilder {
     // Ensure `pre` is an array, even if empty, for consistent handling in the engine
     if (!Array.isArray(this.rule.pre)) {
       this.rule.pre = [];
+    }
+    // Ensure `when` is an array, even if .when() was never called.
+    if (!Array.isArray(this.rule.when)) {
+      this.rule.when = [];
     }
     return this.rule;
   }

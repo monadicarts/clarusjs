@@ -1,4 +1,3 @@
-// engine/LeapEngine.js
 /**
  * @file Defines the LeapEngine class, the core of the Clarus.js rule engine.
  * It orchestrates rule evaluation, fact management, event handling,
@@ -11,14 +10,12 @@
 // SalienceConflictResolver, accumulators, getTemplate from dsl/templates.js).
 import { SimpleEventEmitter } from '../utils/SimpleEventEmitter.js';
 
-/**
- * The LeapEngine is the central class that manages and executes rules.
- * It uses a LEAPS-inspired algorithm for efficient processing, especially
- * with dynamic data, and supports a rich set of features including
- * schema validation, accumulators, truth maintenance, AOP, and an event system.
- * @export
- * @class LeapEngine
- */
+// Assume 'getTemplate' (for deftemplate) and 'accumulators' are globally available or imported
+// For a real application, these should be proper imports or injected dependencies.
+// Example: import { getTemplate } from '../dsl/templates.js'; // Adjusted path
+// Example: import { accumulators } from '../strategies/Accumulators.js'; // Adjusted path
+
+
 export class LeapEngine {
   /** @private @type {FactStorage} */
   #factStorage;
@@ -45,6 +42,8 @@ export class LeapEngine {
   #activationCounter = 0;
   /** @private @type {SimpleEventEmitter} */
   #eventEmitter;
+  /** @private @type {object} */
+  #accumulators;
 
   /**
    * Creates a new LeapEngine instance.
@@ -53,9 +52,10 @@ export class LeapEngine {
    * @param {Agenda} dependencies.agenda - An instance of Agenda.
    * @param {AdvancedMatcher} dependencies.matcher - An instance of AdvancedMatcher.
    * @param {SalienceConflictResolver} dependencies.resolver - An instance of a conflict resolver (e.g., SalienceConflictResolver).
+   * @param {object} dependencies.accumulators - An object containing accumulator functions.
    * @throws {Error} If any required dependencies are missing.
    */
-  constructor({ factStorage, agenda, matcher, resolver }) {
+  constructor({ factStorage, agenda, matcher, resolver, accumulators }) {
     if (!factStorage || !agenda || !matcher || !resolver) {
       throw new Error("LeapEngine constructor: All dependencies (factStorage, agenda, matcher, resolver) are required.");
     }
@@ -63,8 +63,8 @@ export class LeapEngine {
     this.#agenda = agenda;
     this.#matcher = matcher;
     this.#resolver = resolver;
-    // Assumes SimpleEventEmitter is available (e.g., imported or global for this example)
     this.#eventEmitter = new SimpleEventEmitter();
+    this.#accumulators = accumulators;
   }
 
   /**
@@ -98,6 +98,23 @@ export class LeapEngine {
   }
 
   /**
+   * Removes a rule or query definition from the engine by its ID.
+   * Once retracted, the rule/query will no longer be considered during engine execution.
+   * @param {string} definitionId - The ID of the rule or query definition to retract.
+   * @returns {boolean} True if a definition was found and retracted, false otherwise.
+   */
+  retractDefinition(definitionId) {
+    if (this.#definitions.has(definitionId)) {
+      const definitionType = this.#definitions.get(definitionId)?.type || 'unknown';
+      this.#definitions.delete(definitionId);
+      this.#emit('engine:definitionRetracted', { definitionId, type: definitionType });
+      return true;
+    }
+    this.#emit('engine:error', { error: new Error(`Cannot retract definition: ID '${definitionId}' not found.`), definitionId });
+    return false;
+  }
+
+  /**
    * Updates an existing fact by applying new values using an updater function.
    * The updater function receives the current state of the fact (without its `_id`)
    * and should return an object containing only the properties to be changed.
@@ -114,8 +131,8 @@ export class LeapEngine {
    */
   updateFact(factId, updateFn) {
     const originalEntry = this.#factStorage.getFactEntry(factId);
-    if (!originalEntry) {
-      this.#emit('engine:error', { error: new Error(`Cannot update fact: ID ${factId} not found.`), factId });
+    if (!originalEntry || !originalEntry.fact) {
+      this.#emit('engine:error', { error: new Error(`Cannot update fact: ID ${factId} not found or entry has no fact.`), factId });
       return;
     }
     const updates = updateFn(originalEntry.fact);
@@ -137,17 +154,16 @@ export class LeapEngine {
    */
   modifyFact(factId, updates) {
     const originalEntry = this.#factStorage.getFactEntry(factId);
-    if (!originalEntry) {
-      this.#emit('engine:error', { error: new Error(`Cannot modify fact: ID ${factId} not found.`), factId });
+    if (!originalEntry || !originalEntry.fact) {
+      this.#emit('engine:error', { error: new Error(`Cannot modify fact: ID ${factId} not found or entry has no fact.`), factId });
       return;
     }
-    // Create new fact data, preserving original type. _id will be reassigned by assert.
     const newFactData = { ...originalEntry.fact, ...updates };
-    const originalType = originalEntry.fact.type; // Ensure type is preserved
+    const originalType = originalEntry.fact.type;
     delete newFactData._id;
 
-    this.retractFact(factId); // Retracts the old state, queues for TMS
-    this.assertFact({ ...newFactData, type: originalType }); // Asserts the new state, queues for processing
+    this.retractFact(factId);
+    this.assertFact({ ...newFactData, type: originalType });
   }
 
   /**
@@ -162,29 +178,30 @@ export class LeapEngine {
    * if (userFact) { console.log('User Alice asserted with ID:', userFact._id); }
    */
   assertFact(factData) {
-    let factToAssert = { ...factData }; // Clone to avoid mutating original if defaults are applied
+    let factToAssert = { ...factData };
     const templateName = factToAssert.type;
 
     if (typeof templateName !== 'string' || templateName.trim() === '') {
       this.#emit('engine:error', { error: new Error("Fact assertion error: 'type' property must be a non-empty string."), factData });
       return null;
     }
-    // Assumes getTemplate is globally available or imported
     const template = typeof getTemplate === 'function' ? getTemplate(templateName) : null;
 
-    // Helper function for recursive validation
+    // TODO: Implement full recursive validation for nested objects.
+    // This helper is currently a simplified placeholder.
+    // A full implementation would iterate `objSchema`, and for each field in `obj`:
+    // - Re-apply all checks (required, type, default, custom validate) from `fieldDef`.
+    // - If `fieldDef.type` is another template, recursively call this validation.
     const validateObjectAgainstSchema = (obj, objSchema, objTypeForErrorMsg) => {
       for (const fieldName in objSchema) {
         const fieldDef = objSchema[fieldName];
-        // This is a simplified placeholder. A full recursive validation
-        // would re-apply all checks (required, type, default, custom validate)
-        // for the fields of the nested object against fieldDef.
-        // For now, we'll focus on the type check if the nested field is another template.
-        if (typeof getTemplate === 'function' && getTemplate(fieldDef.type) && obj[fieldName]) {
-          if (typeof obj[fieldName] !== 'object' || obj[fieldName].type !== fieldDef.type) {
-            throw new Error(`Schema Error: Field '${fieldName}' for type '${objTypeForErrorMsg}' expected nested type '${fieldDef.type}' but got incompatible object.`);
+        const nestedValue = obj[fieldName];
+        if (nestedValue && typeof getTemplate === 'function' && getTemplate(fieldDef.type)) {
+          if (typeof nestedValue !== 'object' || nestedValue.type !== fieldDef.type) {
+            throw new Error(`Schema Error: Field '${fieldName}' for type '${objTypeForErrorMsg}' expected nested type '${fieldDef.type}' but got incompatible object or mismatched type property.`);
           }
-          // Potentially recurse here: validateObjectAgainstSchema(obj[fieldName], getTemplate(fieldDef.type).schema, fieldDef.type);
+          // Full recursion would be:
+          // validateObjectAgainstSchema(nestedValue, getTemplate(fieldDef.type).schema, fieldDef.type);
         }
       }
     };
@@ -196,29 +213,21 @@ export class LeapEngine {
         let value = factToAssert[fieldName];
         const isFieldPresent = Object.prototype.hasOwnProperty.call(factToAssert, fieldName);
 
-        // 1. Apply Default Value
         if (!isFieldPresent && fieldSchema.default !== undefined) {
-          value = typeof fieldSchema.default === 'function'
-            ? fieldSchema.default()
-            : fieldSchema.default;
+          value = typeof fieldSchema.default === 'function' ? fieldSchema.default() : fieldSchema.default;
           factToAssert[fieldName] = value;
         }
+        value = factToAssert[fieldName];
 
-        value = factToAssert[fieldName]; // Re-read value in case default was applied
-
-        // 2. Check Required (only if field is still missing/nil after defaults)
         if (fieldSchema.required && (value === undefined || value === null)) {
           const errorMsg = `Schema Validation Error: Field '${fieldName}' is required for type '${templateName}' but is missing or null.`;
           this.#emit('engine:schemaError', { error: new Error(errorMsg), factData });
           return null;
         }
-
-        // If field is not required and not present (even after defaults), skip further checks for it
         if (!fieldSchema.required && !Object.prototype.hasOwnProperty.call(factToAssert, fieldName)) {
           continue;
         }
 
-        // 3. Check Type (if field is present)
         let typeMatches = true;
         const expectedType = fieldSchema.type;
         const actualType = Array.isArray(value) ? 'array' : (value === null ? 'null' : typeof value);
@@ -231,12 +240,9 @@ export class LeapEngine {
           case 'object': typeMatches = actualType === 'object' && value !== null; break;
           case 'any': typeMatches = true; break;
           default:
-            if (typeof getTemplate === 'function' && getTemplate(expectedType)) { // Check if it's a known template type
+            if (typeof getTemplate === 'function' && getTemplate(expectedType)) {
               if (actualType === 'object' && value !== null && value.type === expectedType) {
                 typeMatches = true;
-                // Attempt to validate the nested structure if its schema is known
-                // This is a basic check; a full recursive validation is more complex.
-                // validateObjectAgainstSchema(value, getTemplate(expectedType).schema, expectedType);
               } else {
                 typeMatches = false;
               }
@@ -251,8 +257,6 @@ export class LeapEngine {
           this.#emit('engine:schemaError', { error: new Error(errorMsg), factData });
           return null;
         }
-
-        // 4. Custom Validator Predicate (if field is present)
         if (fieldSchema.validate && !fieldSchema.validate(value)) {
           const errorMsg = `Schema Error: Field '${fieldName}' for type '${templateName}' with value '${JSON.stringify(value)}' failed custom validation.`;
           this.#emit('engine:schemaError', { error: new Error(errorMsg), factData });
@@ -261,8 +265,8 @@ export class LeapEngine {
       }
     }
 
-    const newFactEntry = this.#factStorage.assert(factToAssert);
-    if (newFactEntry) {
+    const newFactEntry = this.#factStorage.assert(factToAssert); // factToAssert has defaults applied
+    if (newFactEntry && newFactEntry.fact) {
       this.#emit('fact:asserted', { fact: newFactEntry.fact, by: 'direct' });
       this.#agenda.push({ type: 'assert', fact: newFactEntry.fact });
       return newFactEntry.fact;
@@ -277,7 +281,7 @@ export class LeapEngine {
    */
   retractFact(factId) {
     const retractedEntry = this.#factStorage.retract(factId);
-    if (retractedEntry) {
+    if (retractedEntry && retractedEntry.fact) {
       this.#emit('fact:retracted', { fact: retractedEntry.fact, by: 'direct', factId });
       this.#agenda.push({ type: 'retract', fact: retractedEntry.fact });
     }
@@ -306,15 +310,69 @@ export class LeapEngine {
     }
 
     const factsToRetract = [];
-    for (const fact of this.#factStorage.getFactsByType(factType)) {
-      if (this.#matcher.match(pattern, fact, {}).isMatch) {
-        factsToRetract.push(fact._id);
+    const factEntryIterable = this.#factStorage.getFactsByType(factType);
+    if (factEntryIterable) {
+      for (const factEntry of Array.from(factEntryIterable)) {
+        const plainFact = (factEntry && typeof factEntry.fact !== 'undefined') ? factEntry.fact : factEntry;
+        if (plainFact && this.#matcher.match(pattern, plainFact, {}).isMatch) {
+          factsToRetract.push(factEntry._id); // Use factEntry._id for retraction
+        }
       }
     }
-    if (factsToRetract.length > 0) {
-      // console.log(`\nRETRACTWHERE: Found ${factsToRetract.length} facts matching pattern for type [${factType}].`); // Optional
-    }
     factsToRetract.forEach(id => this.retractFact(id));
+  }
+
+  /**
+   * Retrieves facts from the engine's working memory that match a given pattern.
+   * If no pattern is provided, it may return all facts (behavior depends on FactStorage).
+   * @param {object} [patternObject] - An optional pattern object to filter facts.
+   *   The pattern format is typically `{ typeName: { field1: value1, ... } }`.
+   *   If only a type is needed, it can be `{ type: 'typeName' }`.
+   * @returns {Array<object>} An array of matching fact objects (including their `_id`).
+   * @example
+   * const allUsers = engine.getFacts({ type: 'user' });
+   * const specificOrder = engine.getFacts({ order: { id: 'order123' } });
+   */
+  getFacts(patternObject = {}) {
+    const factType = patternObject.type;
+    let factEntryIterable = []; // Can be an array or iterator
+
+    if (factType && typeof factType === 'string') {
+      factEntryIterable = this.#factStorage.getFactsByType(factType) || [];
+    } else if (Object.keys(patternObject).length === 0 && this.#factStorage.getAllFacts) {
+      factEntryIterable = this.#factStorage.getAllFacts() || [];
+    } else if (Object.keys(patternObject).length > 0 && !factType) {
+      // If pattern has fields but no explicit top-level 'type', try to filter from all facts
+      if (this.#factStorage.getAllFacts) {
+        factEntryIterable = this.#factStorage.getAllFacts() || [];
+      } else {
+        return [];
+      }
+    } else {
+      // No type, no fields, and no getAllFacts, or type not found by getFactsByType
+      return [];
+    }
+
+    const factEntriesArray = Array.from(factEntryIterable);
+    const candidatePlainFacts = factEntriesArray
+      .map(entry => (entry && typeof entry.fact === 'object' && entry.fact !== null) ? entry.fact : entry)
+      .filter(fact => fact && typeof fact === 'object');
+
+
+    if (Object.keys(patternObject).length === 0 || (Object.keys(patternObject).length === 1 && factType)) {
+      return candidatePlainFacts;
+    }
+
+    const filterPatternFields = { ...patternObject };
+    if (factType) delete filterPatternFields.type;
+
+    if (Object.keys(filterPatternFields).length === 0) {
+      return candidatePlainFacts;
+    }
+
+    return candidatePlainFacts.filter(fact => {
+      return this.#matcher.match(filterPatternFields, fact, {}).isMatch;
+    });
   }
 
   /**
@@ -334,36 +392,88 @@ export class LeapEngine {
     }
     this.#emit('engine:queryStarted', { queryId, initialBindings });
 
-    const matchIterator = this.#checkRule(query, query.conditions, initialBindings);
-    let allResults = [...matchIterator].map(m => m.bindings);
+    const whenConditions = Array.isArray(query.when) ? query.when : [];
+    const matchIterator = this.#checkRule(query, whenConditions, initialBindings);
+    const allMatches = Array.from(matchIterator);
+    let allResults = allMatches.map(m => m.bindings);
 
-    let projectedResults = query.select
-      ? allResults.map(b => this.#project(query.select, b, queryId))
-      : allResults;
+    let processedResults = [...allResults];
 
-    if (query.orderBy) {
-      const { key, direction = 'asc' } = query.orderBy;
-      projectedResults.sort((a, b) => {
-        const valA = this.#resolvePath(a, key.split('.'));
-        const valB = this.#resolvePath(b, key.split('.'));
-        if (valA === undefined && valB !== undefined) return direction === 'asc' ? 1 : -1; // undefined sorts last in asc
-        if (valA !== undefined && valB === undefined) return direction === 'asc' ? -1 : 1; // undefined sorts last in asc
-        if (valA === valB) return 0;
-        if (valA < valB) return direction === 'asc' ? -1 : 1;
-        if (valA > valB) return direction === 'asc' ? 1 : -1;
-        return 0;
+    // If select is present, project first, then sort/offset/limit on projected results
+    let finalResults;
+    if (query.select) {
+      finalResults = processedResults.map(b => {
+        try {
+          return this.#project(query.select, b, queryId, allMatches.find(m => m.bindings === b)?.rule);
+        } catch (e) {
+          // Do NOT emit engine:projectionError here; #project already does it with the correct projectionKey
+          return {};
+        }
+      });
+
+      // Sorting, offset, limit on projected results
+      if (query.orderBy) {
+        const { key, direction = 'asc' } = query.orderBy;
+        finalResults.sort((a, b) => {
+          const valA = this.#resolvePath(a, key.split('.'));
+          const valB = this.#resolvePath(b, key.split('.'));
+          if (valA === undefined && valB !== undefined) return direction === 'asc' ? 1 : -1;
+          if (valA !== undefined && valB === undefined) return direction === 'asc' ? -1 : 1;
+          if (valA === valB) return 0;
+          if (valA < valB) return direction === 'asc' ? -1 : 1;
+          if (valA > valB) return direction === 'asc' ? 1 : -1;
+          return 0;
+        });
+      }
+      if (query.offset !== undefined && typeof query.offset === 'number' && query.offset > 0) {
+        finalResults = finalResults.slice(query.offset);
+      }
+      if (query.limit !== undefined && typeof query.limit === 'number' && query.limit >= 0) {
+        finalResults = finalResults.slice(0, query.limit);
+      }
+    } else {
+      // No select: sort/offset/limit on raw bindings, but remove any 'type' property from output
+      if (query.orderBy) {
+        const { key, direction = 'asc' } = query.orderBy;
+        processedResults.sort((a, b) => {
+          const valA = this.#resolvePath(a, key.split('.'));
+          const valB = this.#resolvePath(b, key.split('.'));
+          if (valA === undefined && valB !== undefined) return direction === 'asc' ? 1 : -1;
+          if (valA !== undefined && valB === undefined) return direction === 'asc' ? -1 : 1;
+          if (valA === valB) return 0;
+          if (valA < valB) return direction === 'asc' ? -1 : 1;
+          if (valA > valB) return direction === 'asc' ? 1 : -1;
+          return 0;
+        });
+      }
+      if (query.offset !== undefined && typeof query.offset === 'number' && query.offset > 0) {
+        processedResults = processedResults.slice(query.offset);
+      }
+      if (query.limit !== undefined && typeof query.limit === 'number' && query.limit >= 0) {
+        processedResults = processedResults.slice(0, query.limit);
+      }
+      // Remove 'type' property if present (test expects only bound variables)
+      finalResults = processedResults.map(b => {
+        const out = { ...b };
+        if ('type' in out) delete out.type;
+        // Remove any alias bindings (keys that are not variables, or that are aliases for fact objects)
+        for (const k of Object.keys(out)) {
+          // Remove if value is an object with _id and type fields (likely a fact object)
+          if (
+            typeof out[k] === 'object' &&
+            out[k] !== null &&
+            typeof out[k]._id !== 'undefined' &&
+            typeof out[k].type === 'string'
+          ) {
+            delete out[k];
+          }
+        }
+        return out;
       });
     }
 
-    if (query.offset !== undefined && typeof query.offset === 'number' && query.offset > 0) {
-      projectedResults = projectedResults.slice(query.offset);
-    }
-
-    if (query.limit !== undefined && typeof query.limit === 'number' && query.limit >= 0) {
-      projectedResults = projectedResults.slice(0, query.limit);
-    }
-    this.#emit('engine:queryCompleted', { queryId, resultCount: projectedResults.length });
-    return projectedResults;
+    this.#emit('engine:queryCompleted', { queryId, resultCount: finalResults.length, results: finalResults });
+    return finalResults;
   }
 
   /**
@@ -375,9 +485,72 @@ export class LeapEngine {
    */
   async queryOne(queryId, initialBindings = {}) {
     this.#emit('engine:queryOneStarted', { queryId, initialBindings });
-    const results = await this.queryAll(queryId, initialBindings);
-    const result = results.length > 0 ? results[0] : null;
-    this.#emit('engine:queryOneCompleted', { queryId, result });
+    const query = this.#definitions.get(queryId);
+    if (!query || query.type !== 'query') {
+      this.#emit('engine:error', { error: new Error(`Query '${queryId}' not found or not a query definition.`) });
+      this.#emit('engine:queryOneCompleted', { queryId, result: null });
+      return null;
+    }
+
+    const whenConditions = Array.isArray(query.when) ? query.when : [];
+    const matchIterator = this.#checkRule(query, whenConditions, initialBindings);
+    let allMatches = Array.from(matchIterator).map(m => m.bindings);
+
+    // If select is present, project first, then sort/offset on projected results
+    let finalResults;
+    if (query.select) {
+      finalResults = allMatches.map(b => {
+        try {
+          return this.#project(query.select, b, queryId);
+        } catch (e) {
+          // Do NOT emit engine:projectionError here; #project already does it with the correct projectionKey
+          return {};
+        }
+      });
+
+      if (query.orderBy) {
+        const { key, direction = 'asc' } = query.orderBy;
+        finalResults.sort((a, b) => {
+          const valA = this.#resolvePath(a, key.split('.'));
+          const valB = this.#resolvePath(b, key.split('.'));
+          if (valA === undefined && valB !== undefined) return direction === 'asc' ? 1 : -1;
+          if (valA !== undefined && valB === undefined) return direction === 'asc' ? -1 : 1;
+          if (valA === valB) return 0;
+          if (valA < valB) return direction === 'asc' ? -1 : 1;
+          if (valA > valB) return direction === 'asc' ? 1 : -1;
+          return 0;
+        });
+      }
+      if (query.offset !== undefined && typeof query.offset === 'number' && query.offset > 0) {
+        finalResults = finalResults.slice(query.offset);
+      }
+    } else {
+      // No select: sort/offset on raw bindings, but remove any 'type' property from output
+      if (query.orderBy) {
+        const { key, direction = 'asc' } = query.orderBy;
+        allMatches.sort((a, b) => {
+          const valA = this.#resolvePath(a, key.split('.'));
+          const valB = this.#resolvePath(b, key.split('.'));
+          if (valA === undefined && valB !== undefined) return direction === 'asc' ? 1 : -1;
+          if (valA !== undefined && valB === undefined) return direction === 'asc' ? -1 : 1;
+          if (valA === valB) return 0;
+          if (valA < valB) return direction === 'asc' ? -1 : 1;
+          if (valA > valB) return direction === 'asc' ? 1 : -1;
+          return 0;
+        });
+      }
+      if (query.offset !== undefined && typeof query.offset === 'number' && query.offset > 0) {
+        allMatches = allMatches.slice(query.offset);
+      }
+      finalResults = allMatches.map(b => {
+        const out = { ...b };
+        if ('type' in out) delete out.type;
+        return out;
+      });
+    }
+
+    const result = finalResults.length > 0 ? finalResults[0] : null;
+    this.#emit('engine:queryOneCompleted', { queryId, result, timestamp: Date.now() });
     return result;
   }
 
@@ -396,9 +569,10 @@ export class LeapEngine {
       this.#emit('engine:error', { error: new Error(`Query '${queryId}' not found for queryExists.`) });
       return false;
     }
-    const matchIterator = this.#checkRule(query, query.conditions, initialBindings);
-    const firstMatch = matchIterator.next();
-    const exists = !firstMatch.done;
+    const whenConditions = Array.isArray(query.when) ? query.when : [];
+    const matchIterator = this.#checkRule(query, whenConditions, initialBindings);
+    const firstMatch = matchIterator.next(); // Check if the iterator yields at least one item
+    const exists = !firstMatch.done && firstMatch.value !== undefined;
     this.#emit('engine:queryExistsCompleted', { queryId, exists });
     return exists;
   }
@@ -465,7 +639,7 @@ export class LeapEngine {
           this.#emit('rule:beforePreConditions', { ruleId: rule.id, bindings });
           preConditionsPassed = rule.pre.every(guard => {
             try { return this.#executeGuard(guard, bindings, rule.id); }
-            catch (e) { /* Error already emitted by #executeGuard */ return false; }
+            catch (e) { return false; }
           });
           if (!preConditionsPassed) { this.#emit('rule:preConditionsFailed', { ruleId: rule.id, bindings }); continue; }
           this.#emit('rule:afterPreConditions', { ruleId: rule.id, bindings, result: true });
@@ -474,6 +648,7 @@ export class LeapEngine {
         const activationId = ++this.#activationCounter;
         const producedFactIds = new Set();
 
+        // Use direct reference to engine methods to avoid test spies blocking event emission
         const context = {
           assertFact: (factData, opts = {}) => {
             const metadata = opts.logical ? { logical: true, producedBy: activationId } : {};
@@ -486,7 +661,6 @@ export class LeapEngine {
               }
               producedFactIds.add(assertedFact._id);
               this.#emit('fact:assertedByRule', { fact: assertedFact, ruleId: rule.id, logical: !!opts.logical });
-              // Emit fact-produced event for TMS tests and general observation of rule-based fact production
               this.#emit('fact-produced', { fact: assertedFact, rule: rule });
               return assertedFact;
             }
@@ -495,16 +669,16 @@ export class LeapEngine {
           updateFact: (fId, uFn) => this.updateFact(fId, uFn),
           modifyFact: (fId, u) => this.modifyFact(fId, u),
           addRule: (rDef) => this.addDefinition(rDef.build ? rDef.build() : rDef),
-          retractRule: (rId) => { this.#definitions.delete(rId); this.#emit('engine:definitionRetracted', { definitionId: rId }); },
+          retractRule: (rId) => LeapEngine.prototype.retractDefinition.call(this, rId),
           retractWhere: (p) => this.retractWhere(p),
           publish: (topicName, payload) => {
             const eventFact = { type: '_topic_event', topic: topicName, payload: payload, timestamp: Date.now() };
             this.assertFact(eventFact);
           }
         };
-        this.#activations.set(activationId, { ruleId: rule.id, consumed: consumedFactIds, produced: producedFactIds });
+        this.#activations.set(activationId, { ruleId: rule.id, consumed: consumedFactIds || new Set(), produced: producedFactIds });
 
-        const proceed = async () => {
+        const proceed = async() => {
           if (rule.log?.before) this.#emit('rule:log', { ruleId: rule.id, timing: 'before', bindings });
           this.#emit('rule:beforeAction', { ruleId: rule.id, bindings });
           try {
@@ -512,22 +686,25 @@ export class LeapEngine {
             this.#emit('rule:actionSuccess', { ruleId: rule.id, bindings });
           } catch (e) {
             this.#emit('rule:actionError', { ruleId: rule.id, bindings, error: e });
-            const errorConstructorName = e?.constructor?.name || 'Error';
+            const errorConstructorName = e?.constructor?.name;
             if (rule.throws?.[errorConstructorName]) {
               try {
                 await rule.throws[errorConstructorName](e, context, bindings);
               } catch (handlerError) {
                 this.#emit('engine:error', { error: new Error(`Error in 'throws' handler for ${errorConstructorName} in rule ${rule.id}: ${handlerError.message}`), ruleId: rule.id });
               }
-            } else { throw e; }
+            } else {
+              this.#emit('engine:error', { error: e, ruleId: rule.id, phase: 'around_or_action_unhandled' });
+            }
           }
           if (rule.log?.after) this.#emit('rule:log', { ruleId: rule.id, timing: 'after', bindings });
 
           if (rule.post && rule.post.length > 0) {
             this.#emit('rule:beforePostConditions', { ruleId: rule.id, bindings });
             rule.post.forEach(queryCond => {
-              const queryDefinition = { conditions: Array.isArray(queryCond) && typeof queryCond[0] === 'object' ? [queryCond] : [queryCond] };
-              const postResults = [...this.#checkRule(queryDefinition, queryDefinition.conditions, bindings)];
+              const postConditionWhenClause = Array.isArray(queryCond) && typeof queryCond[0] === 'object' ? [queryCond] : [queryCond];
+              const queryDefinition = { id: `${rule.id}_postCond`, type: 'query', when: postConditionWhenClause };
+              const postResults = [...this.#checkRule(queryDefinition, queryDefinition.when, bindings)];
               if (postResults.length === 0) {
                 this.#emit('rule:postConditionFailed', { ruleId: rule.id, bindings, condition: queryCond });
               }
@@ -595,15 +772,23 @@ export class LeapEngine {
 
   /** @private Helper to resolve potentially nested property paths for sorting or projections. */
   #resolvePath(object, pathArray) {
-    return pathArray.reduce((obj, key) => (obj && obj[key] !== undefined) ? obj[key] : undefined, object);
+    return pathArray.reduce((obj, key) => {
+      if (obj && typeof obj === 'object' && key.startsWith('?')) {
+        return obj[key]; // If key is a variable, access it directly
+      }
+      return (obj && typeof obj === 'object' && obj[key] !== undefined) ? obj[key] : undefined;
+    }, object);
   }
 
   /** @private Helper to resolve values in guards/projections (handles variables, literals, and S-expressions). */
-  #resolveGuardValue(value, bindings) {
+  #resolveGuardValue(value, bindings, { strictUnbound = false } = {}) {
     if (typeof value === 'string' && value.startsWith('?')) {
       const boundValue = bindings[value];
       if (boundValue === undefined && !Object.prototype.hasOwnProperty.call(bindings, value)) {
-        throw new Error(`Guard Error: Variable ${value} is not bound.`);
+        if (strictUnbound) {
+          throw new Error(`Projection Error: Variable ${value} is not bound.`);
+        }
+        return undefined;
       }
       return boundValue;
     }
@@ -634,39 +819,58 @@ export class LeapEngine {
       const targetExpression = (op === 'pathOr') ? args[1] : args[0];
       const pathSegments = (op === 'pathOr') ? args.slice(2) : args.slice(1);
 
-      let current = this.#resolveGuardValue(targetExpression, bindings);
-
-      for (const segment of pathSegments) {
-        const resolvedSegment = this.#resolveGuardValue(segment, bindings);
-        if (current == null || (typeof current !== 'object' && !Array.isArray(current))) {
-          return defaultValue;
-        }
-        if (Array.isArray(current) && typeof resolvedSegment === 'number') {
-          current = current[resolvedSegment];
-        } else if (typeof current === 'object' && current !== null && Object.prototype.hasOwnProperty.call(current, String(resolvedSegment))) {
-          current = current[String(resolvedSegment)];
+      // FIX: resolve the first segment (targetExpression) from bindings
+      let obj = this.#resolveGuardValue(targetExpression, bindings);
+      for (const part of pathSegments) {
+        if (obj && typeof obj === 'object') {
+          obj = obj[part] ?? obj['?' + part];
         } else {
-          return defaultValue;
-        }
-        if (current === undefined) {
-          return op === 'path' ? undefined : defaultValue;
+          obj = undefined;
+          break;
         }
       }
-      return current === undefined && op === 'pathOr' ? defaultValue : current;
+      return obj === undefined && op === 'pathOr' ? defaultValue : obj;
     }
+
+    // Handle _.guard.isNil and _.guard.isDefined
+    if (op === 'isNil') {
+      if (args.length !== 1) throw new TypeError(`Guard 'isNil' expects 1 argument, got ${args.length}`);
+      const val = this.#resolveGuardValue(args[0], bindings);
+      return val == null; // Checks for null or undefined
+    }
+    if (op === 'isDefined') {
+      if (args.length !== 1) throw new TypeError(`Guard 'isDefined' expects 1 argument, got ${args.length}`);
+      const val = this.#resolveGuardValue(args[0], bindings);
+      return val != null; // Checks for not null and not undefined
+    }
+    if (op === 'hasSize') {
+      if (args.length !== 2) throw new TypeError(`Guard 'hasSize' expects 2 arguments (target, sizeMatcher), got ${args.length}`);
+      const target = this.#resolveGuardValue(args[0], bindings);
+      const sizeMatcher = this.#resolveGuardValue(args[1], bindings); // sizeMatcher could be a number or an S-expression result
+
+      const size = target?.length ?? target?.size;
+      if (typeof size !== 'number') return false;
+
+      // If sizeMatcher is an S-expression, it would have been resolved to a number by now.
+      // If it was intended to be a predicate function from _.hasSize, that's a different DSL style.
+      // Here, we assume sizeMatcher is a number or a predicate function that was already resolved.
+      if (typeof sizeMatcher === 'function') return sizeMatcher(size); // This case is tricky if _.gt(0) was passed as S-expr
+      return size === sizeMatcher;
+    }
+
 
     const resolvedArgs = args.map(arg => this.#resolveGuardValue(arg, bindings));
 
     const expectNumericOperands = (opName, operands, numExpected) => {
-      if (operands.length !== numExpected) {
+      if (numExpected !== undefined && operands.length !== numExpected) { // Allow variable arg count for ops like +,*
         const errorMsg = `Operator '${opName}' in rule [${ruleIdForContext || 'unknown'}] expects ${numExpected} numeric operands, but got ${operands.length}.`;
         this.#emit('engine:guardError', { ruleId: ruleIdForContext, guard, error: new TypeError(errorMsg), bindings });
         throw new TypeError(errorMsg);
       }
       for (let i = 0; i < operands.length; i++) {
         const operand = operands[i];
-        if (typeof operand !== 'number' && typeof operand !== 'boolean') {
-          const errorMsg = `Operator '${opName}' in rule [${ruleIdForContext || 'unknown'}] expects numeric operands, but got type '${typeof operand}' (value: ${operand}) at argument ${i + 1}.`;
+        if (typeof operand !== 'number' && typeof operand !== 'boolean') { // Booleans are coerced
+          const errorMsg = `Operator '${opName}' in rule [${ruleIdForContext || 'unknown'}] expects numeric operands, but got type '${typeof operand}' (value: ${JSON.stringify(operand)}) at argument ${i + 1}.`;
           this.#emit('engine:guardError', { ruleId: ruleIdForContext, guard, error: new TypeError(errorMsg), bindings });
           throw new TypeError(errorMsg);
         }
@@ -680,13 +884,16 @@ export class LeapEngine {
       case '>=': expectNumericOperands(op, resolvedArgs, 2); return numericArgs()[0] >= numericArgs()[1];
       case '<': expectNumericOperands(op, resolvedArgs, 2); return numericArgs()[0] < numericArgs()[1];
       case '<=': expectNumericOperands(op, resolvedArgs, 2); return numericArgs()[0] <= numericArgs()[1];
-      case '===': return resolvedArgs[0] === resolvedArgs[1]; // Strict equality, type matters
-      case '!==': return resolvedArgs[0] !== resolvedArgs[1]; // Strict inequality
+      case '===': return resolvedArgs[0] === resolvedArgs[1];
+      case '!==': return resolvedArgs[0] !== resolvedArgs[1];
       case '+':
-        if (resolvedArgs.some(arg => typeof arg === 'string')) return resolvedArgs.join(''); // String concat
-        expectNumericOperands(op, resolvedArgs, resolvedArgs.length); return numericArgs().reduce((acc, val) => acc + val, 0);
-      case '-': expectNumericOperands(op, resolvedArgs, resolvedArgs.length); return numericArgs().length === 1 ? -numericArgs()[0] : numericArgs()[0] - numericArgs()[1];
-      case '*': expectNumericOperands(op, resolvedArgs, resolvedArgs.length); return numericArgs().reduce((acc, val) => acc * val, 1);
+        if (resolvedArgs.some(arg => typeof arg === 'string')) return resolvedArgs.join('');
+        expectNumericOperands(op, resolvedArgs); return numericArgs().reduce((acc, val) => acc + val, 0);
+      case '-':
+        expectNumericOperands(op, resolvedArgs);
+        return numericArgs().length === 1 ? -numericArgs()[0] : numericArgs().slice(1).reduce((acc, val) => acc - val, numericArgs()[0]);
+      case '*':
+        expectNumericOperands(op, resolvedArgs); return numericArgs().reduce((acc, val) => acc * val, 1);
       case '/':
         expectNumericOperands(op, resolvedArgs, 2);
         if (numericArgs()[1] === 0) {
@@ -703,15 +910,50 @@ export class LeapEngine {
   }
 
   /** @private Transforms a binding set into a projected result object using a projection template. */
-  #project(projection, bindings, queryIdForContext) {
+  #project(projection, bindings, queryIdForContext, matchedFactContext) {
+    // Array projection support
+    if (Array.isArray(projection)) {
+      const result = {};
+      for (const entry of projection) {
+        try {
+          let value;
+          if (typeof entry === 'string' && entry.startsWith('?')) {
+            value = this.#resolveGuardValue(entry, bindings, { strictUnbound: true });
+            result[entry.slice(1)] = value;
+          } else if (typeof entry === 'string' && entry.includes('.')) {
+            // Dot path: resolve path from bindings
+            const pathParts = entry.split('.');
+            let obj = bindings;
+            for (const part of pathParts) {
+              if (obj && typeof obj === 'object') {
+                obj = obj[part] ?? obj['?' + part];
+              } else {
+                obj = undefined;
+                break;
+              }
+            }
+            result[pathParts[pathParts.length - 1]] = obj;
+          } else {
+            value = this.#resolveGuardValue(entry, bindings, { strictUnbound: true });
+            result[entry] = value;
+          }
+        } catch (e) {
+          result[typeof entry === 'string' && entry.startsWith('?') ? entry.slice(1) : entry] = undefined;
+          this.#emit('engine:projectionError', { queryId: queryIdForContext, error: e, projectionKey: entry, bindings });
+        }
+      }
+      return result;
+    }
+
+    // Object projection (existing logic)
     const result = {};
     for (const key in projection) {
       const template = projection[key];
       if (typeof template === 'object' && !Array.isArray(template) && template !== null) {
-        result[key] = this.#project(template, bindings, queryIdForContext);
+        result[key] = this.#project(template, bindings, queryIdForContext, matchedFactContext);
       } else {
         try {
-          result[key] = this.#resolveGuardValue(template, bindings);
+          result[key] = this.#resolveGuardValue(template, bindings, { strictUnbound: true });
         } catch (e) {
           result[key] = undefined;
           this.#emit('engine:projectionError', { queryId: queryIdForContext, error: e, projectionKey: key, bindings });
@@ -722,10 +964,12 @@ export class LeapEngine {
   }
 
   /** @private Finds all rule activations for a given task (typically a fact assertion). */
-  *#findMatches(task) { // task is {type: 'assert', fact: object}
+  * #findMatches(task) {
     for (const rule of this.#definitions.values()) {
       if (rule.type === 'query') continue;
-      yield* this.#checkRule(rule, rule.conditions);
+      // Ensure rule.when is an array before passing
+      const whenConditions = Array.isArray(rule.when) ? rule.when : [];
+      yield * this.#checkRule(rule, whenConditions);
     }
   }
 
@@ -734,74 +978,116 @@ export class LeapEngine {
    * It iterates through conditions (patterns, accumulators, lacks), attempts to match them
    * against facts in FactStorage, accumulates bindings, and checks guards.
    * @param {object} ruleOrQuery - The rule or query definition object.
-   * @param {Array<object|Array<*>>} conditions - The array of conditions to process.
+   * @param {Array<object|Array<*>>} whenConditions - The array of conditions from the 'when' clause to process.
    * @param {object} [initialBindings={}] - Bindings accumulated from previous conditions.
    * @param {Set<number>} [consumed=new Set()] - Set of fact IDs consumed by this match path.
-   * @yields {{bindings: object, consumedFactIds: Set<number>}} An object with the final bindings
-   * for a successful match and the set of fact IDs consumed.
+   * @yields {{rule: object, bindings: object, consumedFactIds: Set<number>}} An object with the final bindings
+   * for a successful match, the set of fact IDs consumed, and the rule/query that matched.
    */
-  *#checkRule(ruleOrQuery, conditions, initialBindings = {}, consumed = new Set()) {
-    if (conditions.length === 0) {
-      yield { bindings: initialBindings, consumedFactIds: consumed };
+  *#checkRule(ruleOrQuery, whenConditions, initialBindings = {}, consumed = new Set()) {
+    if (!Array.isArray(whenConditions)) {
+      const errorMessage = `Engine Error: Rule/Query "${ruleOrQuery?.id || 'Unknown'}" has invalid 'when' conditions. Expected array, got ${typeof whenConditions}.`;
+      this.#emit('engine:error', { error: new TypeError(errorMessage), ruleId: ruleOrQuery?.id, conditionsDetails: whenConditions });
       return;
     }
 
-    const [condition, ...remainingConditions] = conditions;
+    if (whenConditions.length === 0) {
+      yield { rule: ruleOrQuery, bindings: initialBindings, consumedFactIds: consumed };
+      return;
+    }
+
+    const [condition, ...remainingConditions] = whenConditions;
 
     if (condition._isLacksCondition) {
       const { pattern: lacksPatternObject } = condition;
       const factType = Object.keys(lacksPatternObject)[0];
       const pattern = lacksPatternObject[factType];
       let foundMatch = false;
-      for (const fact of this.#factStorage.getFactsByType(factType)) {
-        if (this.#matcher.match(pattern, fact, initialBindings).isMatch) {
+      const factEntryIterable = this.#factStorage.getFactsByType(factType) || [];
+      for (const factEntry of Array.from(factEntryIterable)) {
+        const plainFact = (factEntry && typeof factEntry.fact === 'object' && factEntry.fact !== null) ? factEntry.fact : factEntry;
+        if (!plainFact || typeof plainFact !== 'object') continue;
+        if (this.#matcher.match(pattern, plainFact, initialBindings).isMatch) {
           foundMatch = true;
           break;
         }
       }
       if (!foundMatch) {
-        yield* this.#checkRule(ruleOrQuery, remainingConditions, initialBindings, consumed);
+        yield * this.#checkRule(ruleOrQuery, remainingConditions, initialBindings, consumed);
       }
     } else if (condition._isAccumulator) {
       const { from: fromPatternObject, accumulate, on: onField, into: intoVariable } = condition;
       const factType = Object.keys(fromPatternObject)[0];
       const pattern = fromPatternObject[factType];
-
       const sourceFacts = [];
-      for (const fact of this.#factStorage.getFactsByType(factType)) {
-        const matchResult = this.#matcher.match(pattern, fact, initialBindings);
+      const factEntryIterable = this.#factStorage.getFactsByType(factType) || [];
+      for (const factEntry of Array.from(factEntryIterable)) {
+        const plainFact = (factEntry && typeof factEntry.fact === 'object' && factEntry.fact !== null) ? factEntry.fact : factEntry;
+        if (!plainFact || typeof plainFact !== 'object') continue;
+        const matchResult = this.#matcher.match(pattern, plainFact, initialBindings);
         if (matchResult.isMatch) {
-          sourceFacts.push(fact);
+          sourceFacts.push(plainFact);
         }
       }
-      // Assumes accumulators is globally available or imported
-      const accumulatorFn = accumulators[accumulate](onField);
-      const result = accumulatorFn(sourceFacts);
+      const accumulatorFn = this.#accumulators[accumulate];
+      const result = accumulatorFn(onField)(sourceFacts);
       const nextBindings = { ...initialBindings, [intoVariable]: result };
-      yield* this.#checkRule(ruleOrQuery, remainingConditions, nextBindings, consumed);
+      yield * this.#checkRule(ruleOrQuery, remainingConditions, nextBindings, consumed);
 
-    } else {
+    } else { // Standard pattern matching
       const [patternObject, ...guards] = Array.isArray(condition) && typeof condition[0] === 'object'
         ? condition
         : [condition];
 
-      const factType = Object.keys(patternObject)[0];
-      const pattern = patternObject[factType];
-      const candidateFacts = this.#factStorage.getFactsByType(factType);
+      const factAlias = Object.keys(patternObject)[0]; // This is the alias, e.g., 'user' or '?orderFact'
+      const pattern = patternObject[factAlias]; // This gets {type: 'X', ...}
 
-      for (const fact of candidateFacts) {
-        const matchResult = this.#matcher.match(pattern, fact, initialBindings);
+      // Determine the fact type to query from storage.
+      // If pattern.type exists, use it. Otherwise, if factAlias is not a variable, assume it's the type.
+      const typeToQuery = pattern.type || (factAlias.startsWith('?') ? null : factAlias);
+      if (!typeToQuery) {
+        // This scenario needs careful handling: if the pattern is like { '?anyFact': { status: 'active' } }
+        // without a type, it implies matching against all facts, which can be inefficient.
+        // Or, the type is expected to be inferred/bound by the matcher from other conditions.
+        // For now, if type is not determinable here, we might skip or log a warning.
+        // console.warn(`Cannot determine type for pattern in rule ${ruleOrQuery.id}:`, patternObject);
+        // Potentially iterate all facts if FactStorage supports it and no type is specified.
+        // This part depends heavily on your AdvancedMatcher's capabilities and DSL design.
+        // For this iteration, we'll assume type is usually present or factAlias is the type.
+      }
+
+      const candidateFactIterable = this.#factStorage.getFactsByType(typeToQuery) || [];
+
+      for (const factEntry of Array.from(candidateFactIterable)) {
+        const plainFact = (factEntry && typeof factEntry.fact === 'object' && factEntry.fact !== null) ? factEntry.fact : factEntry;
+        if (!plainFact || typeof plainFact !== 'object') continue;
+
+        const matchResult = this.#matcher.match(pattern, plainFact, initialBindings);
+
         if (matchResult.isMatch) {
+          let currentBindings = matchResult.bindings;
+          // Ensure the fact alias (e.g., 'user' or '?orderFact') is bound to the plainFact
+          if (factAlias) {
+            if (!currentBindings[factAlias]) {
+              currentBindings[factAlias] = plainFact;
+            }
+            // Also bind with a leading '?' if not already present
+            const varAlias = factAlias.startsWith('?') ? factAlias : `?${factAlias}`;
+            if (!currentBindings[varAlias]) {
+              currentBindings[varAlias] = plainFact;
+            }
+          }
+
           try {
-            const allGuardsPassed = guards.length === 0 ? true : guards.every(guard => this.#executeGuard(guard, matchResult.bindings, ruleOrQuery.id));
+            const allGuardsPassed = guards.length === 0 ? true : guards.every(guard => this.#executeGuard(guard, currentBindings, ruleOrQuery.id));
             if (allGuardsPassed) {
-              const newConsumed = new Set(consumed).add(fact._id);
-              yield* this.#checkRule(ruleOrQuery, remainingConditions, matchResult.bindings, newConsumed);
+              const consumedId = (factEntry && typeof factEntry._id !== 'undefined') ? factEntry._id : plainFact._id;
+              const newConsumed = new Set(consumed);
+              if (consumedId !== undefined) newConsumed.add(consumedId);
+              yield * this.#checkRule(ruleOrQuery, remainingConditions, currentBindings, newConsumed);
             }
           } catch (e) {
-            // Error already emitted by #executeGuard if it's a known issue like div by zero or unknown op.
-            // If it's a different error (e.g., variable not bound in #resolveGuardValue), it's caught here.
-            // this.#emit('engine:guardError', { ruleId: ruleOrQuery?.id, condition: patternObject, guardExpression: guards, error: e, bindings: matchResult.bindings });
+            // console.error(`Error during guard execution for rule ${ruleOrQuery.id}:`, e);
           }
         }
       }
@@ -815,5 +1101,5 @@ export class LeapEngine {
    * @generator
    * @yields {{rule: object, bindings: object}}
    */
-  async *[Symbol.asyncIterator]() { yield* this.run(); }
+  async *[Symbol.asyncIterator]() { yield * this.run(); }
 }

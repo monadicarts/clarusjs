@@ -1,4 +1,4 @@
-// src/dsl/QueryBuilder.js
+// /home/justin/clarus/src/dsl/QueryBuilder.js
 /**
  * @file Defines the fluent QueryBuilder API for creating query definitions.
  * This builder allows for a step-by-step, readable construction of queries
@@ -34,7 +34,7 @@ export class QueryBuilder {
      * @type {{
      * id: string,
      * when: Array<object|{_isAccumulator:boolean}|{_isLacksCondition:boolean}>,
-     * select?: object,
+     * select?: object | Array<string>,
      * orderBy?: {key: string, direction: 'asc'|'desc'},
      * limit?: number,
      * offset?: number,
@@ -67,25 +67,34 @@ export class QueryBuilder {
   /**
    * Defines the projection for the query, shaping the structure of the result objects.
    * If not called, the query will return the raw binding objects from the `when` clause.
-   * @param {object} projection - An object where keys define the output field names.
-   * Values can be:
+   * @param {object | Array<string>} projection - An object where keys define the output field names,
+   * or an array of strings representing variable names or dot-notation paths to project.
+   * Values in object projection can be:
    * 1. Variable strings from the `when` clause (e.g., `'?userName'`).
    * 2. Literal values (e.g., `true`, `'Constant String'`).
    * 3. S-expression arrays built with `_.select` (alias for `_.guard`) for transformations
    * (e.g., `_.select.add('Order Total: $', '?total')`).
    * 4. Nested objects for creating structured output.
+   * If an array of strings is provided (e.g., `['?orderFact']` or `['user.name', 'user.email']`),
+   * the engine will attempt to resolve these directly from bindings.
    * @returns {QueryBuilder} The builder instance for chaining.
-   * @throws {TypeError} If projection is not an object.
+   * @throws {TypeError} If projection is not an object or an array of strings.
    * @example
    * .select({
    * customerName: '?name',
    * orderValue: '?total',
    * summary: _.select.add('User ', '?name', ' has order value $', '?total')
    * })
+   * // OR
+   * .select(['?order']) // Selects the entire fact bound to ?order
+   * // OR
+   * .select(['user.name', 'user.email']) // Selects specific fields
    */
   select(projection) {
     if (typeof projection !== 'object' || projection === null) {
-      throw new TypeError(`Query [${this.query.id}] .select() argument must be an object.`);
+      if (!Array.isArray(projection) || !projection.every(item => typeof item === 'string')) {
+        throw new TypeError(`Query [${this.query.id}] .select() argument must be an object or an array of strings.`);
+      }
     }
     this.query.select = projection;
     return this;
@@ -168,10 +177,10 @@ export class QueryBuilder {
    */
   build() {
     // ID presence is checked in constructor.
-    if (!this.query.when || this.query.when.length === 0) {
-      // Allowing queries with no `when` conditions (matches all facts of types used in accumulators,
-      // or could be a "select constant" type query if `select` doesn't use variables).
-      // console.warn(`Query [${this.query.id}] built with no .when() conditions. This may match broadly or rely on accumulators over all facts of a type.`);
+    // Ensure 'when' is an array.
+    if (!Array.isArray(this.query.when)) {
+      console.warn(`Query "${this.query.id}" is being built without a valid 'when' array. Defaulting to empty.`);
+      this.query.when = [];
     }
     return this.query;
   }

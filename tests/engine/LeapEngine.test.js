@@ -129,7 +129,7 @@ describe('LeapEngine', () => {
 
   describe('addDefinition', () => {
     test('should add a valid definition and emit event', () => {
-      const ruleDef = { id: 'R1', type: 'rule', conditions: [], then: () => {} };
+      const ruleDef = { id: 'R1', type: 'rule', when: [], then: () => {} };
       const listener = jest.fn();
       engine.on('engine:definitionAdded', listener);
       engine.addDefinition(ruleDef);
@@ -485,7 +485,7 @@ describe('LeapEngine', () => {
     const queryDef = {
       id: 'Q1',
       type: 'query',
-      conditions: [{ type: 'user', name: '?n' }], // Mocked by #checkRule
+      when: [{ type: 'user', name: '?n' }],
       select: { userName: '?n' },
       orderBy: { key: 'userName', direction: 'asc' },
       offset: 1,
@@ -528,7 +528,7 @@ describe('LeapEngine', () => {
     });
 
     test('queryAll should handle no select (raw bindings)', async () => {
-        const queryNoSelect = { id: 'Q_NO_SELECT', type: 'query', conditions: [{ type: 'data', value: '?v'}] };
+        const queryNoSelect = { id: 'Q_NO_SELECT', type: 'query', when: [{ type: 'data', value: '?v'}] };
         engine.addDefinition(queryNoSelect);
         mockFactStorage.getFactsByType.mockReturnValueOnce([{_id:1, type:'data', value:10},{_id:2, type:'data', value:20}]);
         mockMatcher.match.mockImplementation((pattern, fact, bindings) => ({ isMatch: true, bindings: { ...bindings, '?v': fact.value } }));
@@ -539,13 +539,13 @@ describe('LeapEngine', () => {
 
     test('queryAll should handle undefined values in orderBy correctly', async () => {
         const queryOrderByUndefined = {
-            id: 'Q_ORDER_UNDEF', type: 'query', conditions: [],
+            id: 'Q_ORDER_UNDEF', type: 'query', when: [],
             select: { val: '?v' }, orderBy: { key: 'val', direction: 'asc' }
         };
         engine.addDefinition(queryOrderByUndefined);
         // For a query with no conditions, #checkRule might behave differently or not be called in a way that uses getFactsByType.
         // To test orderBy, we need some results. Let's assume conditions match some facts.
-        const queryWithCond = { ...queryOrderByUndefined, conditions: [{type: 'item', value: '?v'}]};
+        const queryWithCond = { ...queryOrderByUndefined, when: [{type: 'item', value: '?v'}]};
         engine.addDefinition(queryWithCond); // Use Q_ORDER_UNDEF as ID but with conditions
         mockFactStorage.getFactsByType.mockReturnValueOnce([ { type: 'item', value: 10, _id:1 }, { type: 'item', value: undefined, _id:2 }, { type: 'item', value: 5, _id:3 }]);
         mockMatcher.match.mockImplementation((pattern, fact, bindings) => ({ isMatch: true, bindings: { ...bindings, '?v': fact.value } }));
@@ -639,13 +639,13 @@ describe('LeapEngine', () => {
       rule1 = {
         id: 'R1',
         type: 'rule',
-        conditions: [{ type: 'trigger' }],
+        when: [{ type: 'trigger' }],
         pre: [],
         then: jest.fn(async (ctx, bindings) => {
             ctx.assertFact({ type: 'consequence', value: bindings['?val'] }, { logical: true });
             ctx.updateFact(123, () => ({ updated: true }));
             ctx.modifyFact(456, { modified: true });
-            ctx.addRule({ id: 'DynamicRule', conditions: [], then: () => {} });
+            ctx.addRule({ id: 'DynamicRule', when: [], then: () => {} });
             ctx.retractRule('OldRule');
             ctx.retractWhere({ type: 'cleanup' });
             ctx.publish('myTopic', { data: 'payload' });
@@ -657,6 +657,7 @@ describe('LeapEngine', () => {
         throws: undefined,
       };
       engine.addDefinition(rule1);
+      engine.addDefinition({ id: 'OldRule', type: 'rule', when: [], then: () => {} });
       // Register listeners after engine is created and rule potentially added
       engine.on('engine:definitionAdded', definitionAddedListener);
       engine.on('engine:definitionRetracted', definitionRetractedListener);
@@ -926,7 +927,7 @@ describe('LeapEngine', () => {
     // Test #resolvePath indirectly via a public method that uses it, e.g., queryAll with orderBy
     test('orderBy in queryAll should correctly use path resolution', async () => {
       const queryWithPath = {
-        id: 'Q_PATH', type: 'query', conditions: [{type: 'data', value: '?v'}],
+        id: 'Q_PATH', type: 'query', when: [{type: 'data', value: '?v'}],
         select: { item: '?v' }, orderBy: { key: 'item.name', direction: 'asc' }
       };
       engine.addDefinition(queryWithPath);
@@ -946,7 +947,7 @@ describe('LeapEngine', () => {
 
       const ruleWithGuard = {
         id: 'R_GUARD', type: 'rule',
-        conditions: [{ type: 'trigger', value: '?x' }],
+        when: [{ type: 'trigger', value: '?x' }],
         pre: [['>', '?x', 5]], // Guard: ?x > 5
         then: jest.fn()
       };
@@ -976,7 +977,7 @@ describe('LeapEngine', () => {
     test('guard with path operator', async () => {
       const ruleWithPathGuard = {
         id: 'R_PATH_GUARD', type: 'rule',
-        conditions: [{ type: 'data', payload: '?p' }],
+        when: [{ type: 'data', payload: '?p' }],
         pre: [['===', ['path', '?p', 'user', 'id'], 123]],
         then: jest.fn()
       };
@@ -1000,7 +1001,7 @@ describe('LeapEngine', () => {
 
       const ruleWithBadGuard = {
         id: 'R_BAD_GUARD_TYPE', type: 'rule',
-        conditions: [{ type: 'trigger', name: '?name', count: '?count' }],
+        when: [{ type: 'trigger', name: '?name', count: '?count' }],
         pre: [['>', '?name', '?count']], // Comparing string with number
         then: jest.fn()
       };
@@ -1021,7 +1022,7 @@ describe('LeapEngine', () => {
 
       const ruleDivZero = {
         id: 'R_DIV_ZERO', type: 'rule',
-        conditions: [{ type: 'operands', x: '?x', y: '?y' }],
+        when: [{ type: 'operands', x: '?x', y: '?y' }],
         pre: [['/', '?x', '?y']],
         then: jest.fn()
       };
@@ -1056,7 +1057,7 @@ describe('LeapEngine', () => {
     test('queryAll select should correctly project bindings', async () => {
       const queryWithProjection = {
         id: 'Q_PROJ', type: 'query',
-        conditions: [{ type: 'user', id: '?id', name: '?name', age: '?age' }],
+        when: [{ type: 'user', id: '?id', name: '?name', age: '?age' }],
         select: { userId: '?id', info: { userName: '?name', nextAge: ['+', '?age', 1] } }
       };
       engine.addDefinition(queryWithProjection);
@@ -1073,12 +1074,12 @@ describe('LeapEngine', () => {
 
       const queryWithBadProjection = {
         id: 'Q_BAD_PROJ', type: 'query',
-        conditions: [{ type: 'user', id: '?id' }],
+        when: [{ type: 'user', id: '?id' }],
         select: { userId: '?id', unbound: '?unboundVar' } // ?unboundVar will cause error
       };
       engine.addDefinition(queryWithBadProjection);
       mockFactStorage.getFactsByType.mockReturnValueOnce([{ type: 'user', id: 1, _id: 101 }]);
-      mockMatcher.match.mockImplementation((pattern, fact, bindings) => ({isMatch: true, bindings: { ...bindings, '?id': fact.id }}));
+      mockMatcher.match.mockImplementation((pattern, fact, bindings) => ({isMatch: true, bindings: { '?id': fact.id }}));
 
       const results = await engine.queryAll('Q_BAD_PROJ');
       expect(results.length).toBe(1); // Should still get one result object
@@ -1088,5 +1089,153 @@ describe('LeapEngine', () => {
       );
     });
   });
+  describe('LeapEngine (additional coverage)', () => {
+    describe('Querying edge cases', () => {
+      test('queryAll returns empty array if no matches', async () => {
+        const queryDef = {
+          id: 'Q_EMPTY',
+          type: 'query',
+          when: [{ type: 'ghost', name: '?n' }],
+          select: { ghostName: '?n' }
+        };
+        engine.addDefinition(queryDef);
+        mockFactStorage.getFactsByType.mockReturnValueOnce([]);
+        mockMatcher.match.mockImplementation(() => ({ isMatch: false, bindings: {} }));
+        const results = await engine.queryAll('Q_EMPTY');
+        expect(results).toEqual([]);
+      });
 
+      test('queryOne returns null if no matches', async () => {
+        const queryDef = {
+          id: 'Q_ONE_EMPTY',
+          type: 'query',
+          when: [{ type: 'ghost', name: '?n' }],
+          select: { ghostName: '?n' }
+        };
+        engine.addDefinition(queryDef);
+        mockFactStorage.getFactsByType.mockReturnValueOnce([]);
+        mockMatcher.match.mockImplementation(() => ({ isMatch: false, bindings: {} }));
+        const result = await engine.queryOne('Q_ONE_EMPTY');
+        expect(result).toBeNull();
+      });
+
+      test('queryExists returns false if no matches', async () => {
+        const queryDef = {
+          id: 'Q_EXISTS_EMPTY',
+          type: 'query',
+          when: [{ type: 'ghost', name: '?n' }]
+        };
+        engine.addDefinition(queryDef);
+        mockFactStorage.getFactsByType.mockReturnValueOnce([]);
+        mockMatcher.match.mockImplementation(() => ({ isMatch: false, bindings: {} }));
+        const exists = await engine.queryExists('Q_EXISTS_EMPTY');
+        expect(exists).toBe(false);
+      });
+
+      test('queryAll supports array projection', async () => {
+        const queryDef = {
+          id: 'Q_ARRAY_PROJ',
+          type: 'query',
+          when: [{ type: 'user', id: '?id', name: '?name' }],
+          select: ['?id', '?name']
+        };
+        engine.addDefinition(queryDef);
+        mockFactStorage.getFactsByType.mockReturnValueOnce([{ type: 'user', id: 1, name: 'Alice', _id: 1 }]);
+        mockMatcher.match.mockImplementation((pattern, fact, bindings) => ({ isMatch: true, bindings: { ...bindings, '?id': fact.id, '?name': fact.name } }));
+        const results = await engine.queryAll('Q_ARRAY_PROJ');
+        expect(results).toEqual([{ id: 1, name: 'Alice' }]);
+      });
+
+      test('queryAll supports array projection with dot paths', async () => {
+        const queryDef = {
+          id: 'Q_ARRAY_PATH_PROJ',
+          type: 'query',
+          when: [{ type: 'user', id: '?id', profile: '?profile' }],
+          select: ['?id', 'profile.bio']
+        };
+        engine.addDefinition(queryDef);
+        mockFactStorage.getFactsByType.mockReturnValueOnce([
+          { type: 'user', id: 1, profile: { bio: 'dev' }, _id: 1 }
+        ]);
+        mockMatcher.match.mockImplementation((pattern, fact, bindings) => ({
+          isMatch: true,
+          bindings: { ...bindings, '?id': fact.id, profile: fact.profile }
+        }));
+        const results = await engine.queryAll('Q_ARRAY_PATH_PROJ');
+        expect(results).toEqual([{ id: 1, bio: 'dev' }]);
+      });
+    });
+
+    describe('Rule and definition management', () => {
+      test('addDefinition emits engine:definitionAdded event', () => {
+        const listener = jest.fn();
+        engine.on('engine:definitionAdded', listener);
+        const ruleDef = { id: 'R_ADD', type: 'rule', when: [], then: () => {} };
+        engine.addDefinition(ruleDef);
+        expect(listener).toHaveBeenCalledWith(expect.objectContaining({ definitionId: 'R_ADD' }));
+      });
+
+      test('retractDefinition emits engine:definitionRetracted event', () => {
+        const listener = jest.fn();
+        const ruleDef = { id: 'R_REMOVE', type: 'rule', when: [], then: () => {} };
+        engine.addDefinition(ruleDef);
+        engine.on('engine:definitionRetracted', listener);
+        engine.retractDefinition('R_REMOVE');
+        expect(listener).toHaveBeenCalledWith(expect.objectContaining({ definitionId: 'R_REMOVE' }));
+      });
+
+      test('retractDefinition emits error if id not found', () => {
+        const errorListener = jest.fn();
+        engine.on('engine:error', errorListener);
+        engine.retractDefinition('NON_EXISTENT');
+        expect(errorListener).toHaveBeenCalledWith(expect.objectContaining({ error: expect.any(Error), definitionId: 'NON_EXISTENT' }));
+      });
+    });
+
+    describe('Fact assertion and modification', () => {
+      test('assertFact emits fact:asserted event', () => {
+        const listener = jest.fn();
+        engine.on('fact:asserted', listener);
+        mockFactStorage.assert.mockReturnValue({ fact: { type: 'user', _id: 1 }, metadata: {} });
+        engine.assertFact({ type: 'user' });
+        expect(listener).toHaveBeenCalledWith(expect.objectContaining({ fact: { type: 'user', _id: 1 }, by: 'direct' }));
+      });
+
+      test('modifyFact emits error if factId not found', () => {
+        const errorListener = jest.fn();
+        engine.on('engine:error', errorListener);
+        mockFactStorage.getFactEntry.mockReturnValue(undefined);
+        engine.modifyFact(999, { name: 'Ghost' });
+        expect(errorListener).toHaveBeenCalledWith(expect.objectContaining({ error: expect.any(Error), factId: 999 }));
+      });
+
+      test('updateFact emits error if updateFn returns non-object', () => {
+        const errorListener = jest.fn();
+        engine.on('engine:error', errorListener);
+        mockFactStorage.getFactEntry.mockReturnValue({ fact: { type: 'user', _id: 1 }, metadata: {} });
+        engine.updateFact(1, () => null);
+        expect(errorListener).toHaveBeenCalledWith(expect.objectContaining({ error: expect.any(Error), factId: 1 }));
+      });
+    });
+
+    describe('Event system', () => {
+      test('on registers multiple listeners for same event', () => {
+        const l1 = jest.fn();
+        const l2 = jest.fn();
+        engine.on('fact:asserted', l1);
+        engine.on('fact:asserted', l2);
+        mockFactStorage.assert.mockReturnValue({ fact: { type: 'user', _id: 1 }, metadata: {} });
+        engine.assertFact({ type: 'user' });
+        expect(l1).toHaveBeenCalled();
+        expect(l2).toHaveBeenCalled();
+      });
+
+      test('emits engine:error for invalid definition', () => {
+        const errorListener = jest.fn();
+        engine.on('engine:error', errorListener);
+        engine.addDefinition({}); // No id
+        expect(errorListener).toHaveBeenCalledWith(expect.objectContaining({ error: expect.any(Error) }));
+      });
+    });
+  });
 });

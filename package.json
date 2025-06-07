@@ -48,7 +48,8 @@
     "test:coverage": "jest --coverage",
     "lint": "eslint src/**/*.js tests/**/*.js",
     "format": "prettier --write \"src/**/*.js\" \"tests/**/*.js\"",
-    "check-types": "tsc --noEmit -p jsconfig.json"
+    "check-types": "tsc --noEmit -p jsconfig.json",
+    "examples": "node examples/index.js"
   },
   "devDependencies": {
     "@babel/cli": "^7.27.2",
